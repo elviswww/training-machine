@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 足球守門員 - 聲音與姿勢互動遊戲</title>
+  <!-- TensorFlow.js 與 Teachable Machine 官方庫 (含聲音與姿勢) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at top, #1e293b, #0f172a 80%);
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-bottom: 24px;
+    }
+
+    header {
+      padding: 18px 12px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 1.8rem;
+      color: #38bdf8;
+      letter-spacing: 1px;
+      text-shadow: 0 2px 10px rgba(56, 189, 248, 0.3);
+    }
+    .subtitle {
+      font-size: 0.95rem;
+      color: #94a3b8;
+      margin-top: 6px;
+    }
+
+    #app-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+      width: 100%;
+      max-width: 1050px;
+      padding: 10px;
+    }
+
+    /* 遊戲主球場 */
+    #game-stage {
+      position: relative;
+      width: 600px;
+      height: 440px;
+      background: linear-gradient(to bottom, #0f172a 0%, #1e3a8a 35%, #065f46 65%, #047857 100%);
+      border: 3px solid #334155;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+      transition: border-color 0.25s ease;
+    }
+
+    /* 球門結構 */
+    .goal-frame {
+      position: absolute;
+      top: 60px;
+      left: 80px;
+      width: 440px;
+      height: 240px;
+      border: 10px solid #ffffff;
+      border-bottom: none;
+      background: repeating-linear-gradient(45deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 12px, transparent 12px, transparent 24px),
+                  repeating-linear-gradient(-45deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 12px, transparent 12px, transparent 24px);
+      box-shadow: inset 0 6px 14px rgba(0,0,0,0.4);
+    }
+
+    /* 守門員造型 */
+    #goalkeeper {
+      position: absolute;
+      bottom: 130px;
+      left: 260px;
+      width: 80px;
+      height: 110px;
+      will-change: transform;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 5;
+    }
+    .gk-head {
+      width: 32px;
+      height: 32px;
+      background: #fed7aa;
+      border-radius: 50%;
+      border: 3px solid #1e293b;
+    }
+    .gk-body {
+      width: 44px;
+      height: 52px;
+      background: #e11d48;
+      border-radius: 8px;
+      margin-top: -3px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .gk-gloves {
+      position: absolute;
+      width: 78px;
+      display: flex;
+      justify-content: space-between;
+      top: 36px;
+    }
+    .glove {
+      width: 20px;
+      height: 20px;
+      background: #facc15;
+      border-radius: 50%;
+      border: 2px solid #000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    }
+
+    /* 足球 */
+    #ball {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      background: radial-gradient(circle at 35% 35%, #ffffff, #cbd5e1 70%, #64748b 100%);
+      border-radius: 50%;
+      border: 2px solid #0f172a;
+      box-shadow: 0 10px 18px rgba(0,0,0,0.6);
+      display: none;
+      z-index: 4;
+    }
+
+    /* 彈出層 (導引、倒數、結算) */
+    #banner-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.88);
+      backdrop-filter: blur(4px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      z-index: 20;
+    }
+    #modal-title {
+      font-size: 1.8rem;
+      margin-bottom: 12px;
+      color: #facc15;
+    }
+    #modal-desc {
+      font-size: 0.95rem;
+      color: #cbd5e1;
+      max-width: 460px;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .btn {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4);
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover {
+      background: #0369a1;
+      transform: translateY(-1px);
+    }
+
+    /* 蓄力進度條 (難度判定) */
+    #lock-meter-container {
+      width: 260px;
+      height: 10px;
+      background: #334155;
+      border-radius: 5px;
+      overflow: hidden;
+      margin-top: 14px;
+      display: none;
+    }
+    #lock-meter-fill {
+      height: 100%;
+      width: 0%;
+      background: #22c55e;
+      transition: width 0.08s linear;
+    }
+
+    /* 側邊儀表板 */
+    #sensor-panel {
+      width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #hud {
+      display: flex;
+      justify-content: space-between;
+      background: #1e293b;
+      padding: 12px 18px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+    .hud-tag {
+      color: #38bdf8;
+    }
+
+    .cam-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .cam-wrapper {
+      position: relative;
+      width: 320px;
+      height: 240px;
+      background: #020617;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #475569;
+    }
+    #webcam-canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .status-badge {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      padding: 4px 10px;
+      background: #0f172a;
+      border-radius: 6px;
+      border: 1px solid #334155;
+    }
+
+    /* 信心分數長條圖 */
+    .confidence-list {
+      width: 100%;
+      margin-top: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .conf-row {
+      display: flex;
+      align-items: center;
+      font-size: 0.85rem;
+      justify-content: space-between;
+    }
+    .conf-label {
+      width: 80px;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+    .conf-bar-bg {
+      flex: 1;
+      height: 12px;
+      background: #334155;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 0 10px;
+    }
+    .conf-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #38bdf8;
+      border-radius: 6px;
+      transition: width 0.1s ease;
+    }
+    .conf-val {
+      width: 45px;
+      text-align: right;
+      color: #94a3b8;
+      font-family: monospace;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>AI 足球守門員：聲控與體感對決</h1>
+    <p class="subtitle">第一步：發出聲音/口令選難度 ➔ 第二步：身體左右傾斜撲救射門</p>
+  </header>
+
+  <div id="app-container">
+    <!-- 主遊戲畫面 -->
+    <div id="game-stage">
+      <div class="goal-frame"></div>
+      <div id="goalkeeper">
+        <div class="gk-head"></div>
+        <div class="gk-body"></div>
+        <div class="gk-gloves">
+          <div class="glove"></div>
+          <div class="glove"></div>
+        </div>
+      </div>
+      <div id="ball"></div>
+
+      <!-- 說明與互動覆蓋層 -->
+      <div id="banner-overlay">
+        <h2 id="modal-title">準備進行遊戲</h2>
+        <p id="modal-desc">點擊下方按鈕啟動麥克風與攝影機，載入 Teachable Machine 聲音與姿勢模型。</p>
+        <button id="start-btn" class="btn" onclick="bootstrapGame()">啟用麥克風/鏡頭並載入模型</button>
+        <div id="lock-meter-container">
+          <div id="lock-meter-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 視覺監控儀表板 -->
+    <div id="sensor-panel">
+      <div id="hud">
+        <span>難度: <span id="hud-diff" class="hud-tag">未選擇</span></span>
+        <span>撲救率: <span id="hud-score" class="hud-tag">0 / 0</span></span>
+      </div>
+
+      <div class="cam-card">
+        <div class="cam-wrapper">
+          <canvas id="webcam-canvas" width="320" height="240"></canvas>
+        </div>
+        <div class="status-badge">
+          目前階段：<span id="current-phase-text" style="color: #facc15; font-weight: bold;">等待就緒</span>
+        </div>
+        <div class="confidence-list" id="class-bars">
+          <!-- 信心分數長條圖 -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 模型端點 (第一階段聲音模型 + 第二階段姿勢模型)
+    const SOUND_MODEL_URL = "https://teachablemachine.withgoogle.com/models/dT7mWNNSI/";
+    const POSE_MODEL_URL = "https://teachablemachine.withgoogle.com/models/KocRLo_tJ/";
+
+    const PHASE = {
+      INIT: 'INIT',
+      DIFFICULTY_SELECTION: 'DIFF_SELECT',
+      PLAYING: 'PLAYING',
+      GAME_OVER: 'GAME_OVER'
+    };
+
+    let currentPhase = PHASE.INIT;
+    let soundModel = null;
+    let poseModel = null;
+    let webcam = null;
+    let audioCtx = null;
+    let soundLabels = [];
+
+    // 遊戲物理與設定
+    let difficultySpeed = 4;
+    let selectedDiffName = "";
+    let score = { saved: 0, total: 0 };
+    let gkPositionX = 260; // 守門員 X 軸中心
+    let targetGkPositionX = 260;
+
+    let ball = {
+      active: false,
+      x: 278,
+      y: 360,
+      targetSide: null,
+      targetX: 278,
+      scale: 1.2
+    };
+
+    // 難度選擇穩定度計數 (蓄力過濾雜訊)
+    let diffConfidenceCounter = { classIdx: -1, count: 0 };
+    const DIFF_HOLD_FRAMES = 4; // 縮短判定門檻，發出目標聲音即可極速鎖定 (約 0.3~0.5 秒)
+
+    // 骨架繪圖快取
+    let latestPose = null;
+
+    // --- Web Audio 原生音效 ---
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function playSound(type) {
+      if (!audioCtx) return;
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      if (type === 'kick') {
+        osc.frequency.setValueAtTime(160, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+        gain.gain.setValueAtTime(0.8, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.12);
+      } else if (type === 'save') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(1040, now + 0.22);
+        gain.gain.setValueAtTime(0.7, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.22);
+        osc.start(now);
+        osc.stop(now + 0.22);
+      } else if (type === 'goal') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.exponentialRampToValueAtTime(60, now + 0.35);
+        gain.gain.setValueAtTime(0.6, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      }
+    }
+
+    // --- 系統初始化 ---
+    async function bootstrapGame() {
+      initAudio();
+      document.getElementById('modal-title').innerText = "載入模型權重中...";
+      document.getElementById('modal-desc').innerText = "正在下載 Teachable Machine 聲音與姿勢模型檔案，並申請麥克風與相機權限...";
+      document.getElementById('start-btn').style.display = 'none';
+
+      try {
+        // 載入聲音分類模型
+        soundModel = speechCommands.create(
+          "BROWSER_FFT",
+          undefined,
+          SOUND_MODEL_URL + "model.json",
+          SOUND_MODEL_URL + "metadata.json"
+        );
+        await soundModel.ensureModelLoaded();
+        soundLabels = soundModel.wordLabels();
+
+        // 載入姿勢分類模型
+        poseModel = await tmPose.load(POSE_MODEL_URL + "model.json", POSE_MODEL_URL + "metadata.json");
+
+        // 初始化攝影機
+        webcam = new tmPose.Webcam(320, 240, true);
+        await webcam.setup();
+        await webcam.play();
+
+        await enterDifficultyPhase();
+
+        requestAnimationFrame(gameLoop);
+        predictLoop();
+      } catch (err) {
+        console.error(err);
+        const desc = document.getElementById('modal-desc');
+        desc.innerText = "麥克風/攝影機存取被拒絕或模型載入失敗，請確認已授權權限並重新整理！";
+      }
+    }
+
+    // --- 階段 1：聲音分類選難度 ---
+    async function enterDifficultyPhase() {
+      currentPhase = PHASE.DIFFICULTY_SELECTION;
+      latestPose = null;
+      diffConfidenceCounter = { classIdx: -1, count: 0 };
+      const meterFill = document.getElementById('lock-meter-fill');
+      if (meterFill) meterFill.style.width = "0%";
+
+      document.getElementById('current-phase-text').innerText = "聲音辨識 (選難度)";
+      document.getElementById('modal-title').innerText = "【第一關】發出聲音選擇難度";
+      
+      // 動態列出除了背景雜音之外的模型標籤
+      const validLabels = soundLabels.filter(l => !l.toLowerCase().includes('background'));
+      const labelText = validLabels.length > 0
+        ? validLabels.map((l, i) => `<strong>${l}</strong> ➔ 難度等級 ${i + 1}`).join('<br>')
+        : "向麥克風發出設定的聲音或指令";
+
+      document.getElementById('modal-desc').innerHTML = `
+        向麥克風持續發出目標聲音累積蓄力條：<br><br>
+        ${labelText}
+      `;
+      document.getElementById('banner-overlay').style.display = 'flex';
+      document.getElementById('lock-meter-container').style.display = 'block';
+      setupConfidenceBars(soundLabels);
+
+      // 安全啟動聲音監聽（若先前串流仍在運行，先停止並等待釋放）
+      if (soundModel) {
+        if (soundModel.isListening()) {
+          try {
+            await soundModel.stopListening();
+          } catch (e) {
+            console.warn("停止先前聲音串流警示:", e);
+          }
+        }
+        try {
+          soundModel.listen(result => {
+            if (currentPhase !== PHASE.DIFFICULTY_SELECTION) return;
+            handleSoundPrediction(result.scores);
+          }, {
+            includeSpectrogram: false,
+            probabilityThreshold: 0.70,
+            invokeCallbackOnNoiseAndUnknown: true,
+            overlapFactor: 0.50
+          });
+        } catch (listenErr) {
+          console.warn("啟動聲音串流失敗:", listenErr);
+        }
+      }
+    }
+
+    async function handleSoundPrediction(scores) {
+      // 格式化預測結果供長條圖顯示
+      const predictions = soundLabels.map((label, idx) => ({
+        className: label,
+        probability: scores[idx] || 0
+      }));
+      updateConfidenceBars(predictions);
+
+      // 找出非 Background Noise 中最高機率的類別
+      let maxIdx = -1;
+      let maxProb = 0;
+      for (let i = 0; i < scores.length; i++) {
+        const label = soundLabels[i].toLowerCase();
+        if (label.includes('background') || label.includes('_noise_')) continue;
+        if (scores[i] > maxProb) {
+          maxProb = scores[i];
+          maxIdx = i;
+        }
+      }
+
+      const meterFill = document.getElementById('lock-meter-fill');
+      if (maxIdx !== -1 && maxProb > 0.75) {
+        if (diffConfidenceCounter.classIdx === maxIdx) {
+          diffConfidenceCounter.count += 2;
+          const pct = Math.min(100, (diffConfidenceCounter.count / DIFF_HOLD_FRAMES) * 100);
+          meterFill.style.width = pct + "%";
+
+          if (diffConfidenceCounter.count >= DIFF_HOLD_FRAMES) {
+            // 停止聲音辨識以節省效能並避免重複監聽
+            if (soundModel && soundModel.isListening()) {
+              try {
+                await soundModel.stopListening();
+              } catch (e) {
+                console.warn("停止聲音辨識時出現警示:", e);
+              }
+            }
+
+            // 難度速度對應
+            const selectedLabel = soundLabels[maxIdx];
+            const nonNoiseLabels = soundLabels.filter(l => !l.toLowerCase().includes('background'));
+            const targetIndex = nonNoiseLabels.indexOf(selectedLabel);
+
+            const speedMap = [3.8, 6.2, 9.2];
+            const targetSpeed = speedMap[targetIndex] || 5.0;
+            startMatch(`聲控: ${selectedLabel}`, targetSpeed);
+          }
+        } else {
+          diffConfidenceCounter.classIdx = maxIdx;
+          diffConfidenceCounter.count = 2;
+          const pct = Math.min(100, (diffConfidenceCounter.count / DIFF_HOLD_FRAMES) * 100);
+          meterFill.style.width = pct + "%";
+        }
+      } else {
+        diffConfidenceCounter.count = Math.max(0, diffConfidenceCounter.count - 1);
+        const pct = Math.min(100, (diffConfidenceCounter.count / DIFF_HOLD_FRAMES) * 100);
+        meterFill.style.width = pct + "%";
+      }
+    }
+
+    // --- 階段 2：姿勢分類守門對決 ---
+    function startMatch(diffName, speed) {
+      difficultySpeed = speed;
+      selectedDiffName = diffName;
+      document.getElementById('hud-diff').innerText = diffName;
+      currentPhase = PHASE.PLAYING;
+      document.getElementById('current-phase-text').innerText = "姿勢辨識 (守門撲救)";
+      document.getElementById('banner-overlay').style.display = 'none';
+      document.getElementById('lock-meter-container').style.display = 'none';
+      setupConfidenceBars(["left (撲左)", "right (撲右)"]);
+
+      setTimeout(spawnBall, 1500);
+    }
+
+    function setupConfidenceBars(labels) {
+      const container = document.getElementById('class-bars');
+      container.innerHTML = "";
+      labels.forEach((label, idx) => {
+        const row = document.createElement('div');
+        row.className = 'conf-row';
+        row.innerHTML = `
+          <span class="conf-label">${label.split(' ')[0]}</span>
+          <div class="conf-bar-bg"><div class="conf-bar-fill" id="bar-${idx}"></div></div>
+          <span class="conf-val" id="val-${idx}">0%</span>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    function updateConfidenceBars(predictions) {
+      predictions.forEach((p, idx) => {
+        const fill = document.getElementById(`bar-${idx}`);
+        const val = document.getElementById(`val-${idx}`);
+        if (fill && val) {
+          const pct = Math.round(p.probability * 100);
+          fill.style.width = pct + "%";
+          val.innerText = pct + "%";
+        }
+      });
+    }
+
+    // --- 推論迴圈 (解耦獨立運行，姿勢辨識專用) ---
+    async function predictLoop() {
+      if (webcam && webcam.canvas) {
+        webcam.update();
+
+        // 階段二：姿勢分類
+        if (currentPhase === PHASE.PLAYING && poseModel) {
+          const { pose, posenetOutput } = await poseModel.estimatePose(webcam.canvas);
+          latestPose = pose; // 快取給渲染迴圈畫骨架
+          const predictions = await poseModel.predict(posenetOutput);
+          updateConfidenceBars(predictions);
+
+          const leftProb = predictions.find(p => p.className.toLowerCase() === 'left')?.probability || 0;
+          const rightProb = predictions.find(p => p.className.toLowerCase() === 'right')?.probability || 0;
+
+          // 門檻 75% 觸發左右撲救
+          if (leftProb > 0.75) {
+            targetGkPositionX = 130; // 撲向左球門柱
+          } else if (rightProb > 0.75) {
+            targetGkPositionX = 390; // 撲向右球門柱
+          } else {
+            targetGkPositionX = 260; // 回正防守
+          }
+        }
+      }
+      setTimeout(predictLoop, 40);
+    }
+
+    // --- 足球機制 ---
+    function spawnBall() {
+      if (currentPhase !== PHASE.PLAYING) return;
+      ball.active = true;
+      ball.x = 278;
+      ball.y = 360;
+      ball.scale = 1.3;
+      ball.targetSide = Math.random() > 0.5 ? 'left' : 'right';
+      ball.targetX = ball.targetSide === 'left' ? 140 : 400;
+
+      const ballElem = document.getElementById('ball');
+      ballElem.style.display = 'block';
+      playSound('kick');
+    }
+
+    // --- 骨架繪圖輔助 ---
+    // 標準 PoseNet 17 個關鍵點之間的骨架拓撲連線表 (避免依賴 tmPose 內部未導出的函式)
+    const POSE_CONNECTIONS = [
+      [0, 1], [0, 2], [1, 3], [2, 4],           // 五官 (鼻、眼、耳)
+      [5, 6],                                   // 雙肩
+      [5, 7], [7, 9],                           // 左手臂 (肩-肘-腕)
+      [6, 8], [8, 10],                          // 右手臂 (肩-肘-腕)
+      [5, 11], [6, 12],                         // 軀幹兩側 (肩-髖)
+      [11, 12],                                 // 骨盆 (左髖-右髖)
+      [11, 13], [13, 15],                       // 左腿 (髖-膝-踝)
+      [12, 14], [14, 16]                        // 右腿 (髖-膝-踝)
+    ];
+
+    function drawPose(ctx, pose) {
+      if (!pose || !pose.keypoints) return;
+      const minConfidence = 0.4;
+
+      // 繪製關節點
+      for (let i = 0; i < pose.keypoints.length; i++) {
+        const keypoint = pose.keypoints[i];
+        if (keypoint && keypoint.score > minConfidence) {
+          ctx.beginPath();
+          ctx.arc(keypoint.position.x, keypoint.position.y, 4, 0, 2 * Math.PI);
+          ctx.fillStyle = '#38bdf8';
+          ctx.fill();
+        }
+      }
+
+      // 繪製骨架連接線
+      POSE_CONNECTIONS.forEach(([startIndex, endIndex]) => {
+        const startPoint = pose.keypoints[startIndex];
+        const endPoint = pose.keypoints[endIndex];
+
+        if (startPoint && endPoint && startPoint.score > minConfidence && endPoint.score > minConfidence) {
+          ctx.beginPath();
+          ctx.moveTo(startPoint.position.x, startPoint.position.y);
+          ctx.lineTo(endPoint.position.x, endPoint.position.y);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#22c55e';
+          ctx.stroke();
+        }
+      });
+    }
+
+    // --- 60 FPS 主遊戲渲染迴圈 ---
+    function gameLoop() {
+      // 繪製攝影機鏡頭與人體骨架
+      if (webcam && webcam.canvas) {
+        const canvas = document.getElementById('webcam-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(webcam.canvas, 0, 0, 320, 240);
+
+        if (currentPhase === PHASE.PLAYING && latestPose) {
+          drawPose(ctx, latestPose);
+        }
+      }
+
+      // 守門員移動平滑內插 (Lerp)
+      gkPositionX += (targetGkPositionX - gkPositionX) * 0.22;
+      const gkElem = document.getElementById('goalkeeper');
+      gkElem.style.transform = `translateX(${gkPositionX - 260}px)`;
+
+      // 足球軌跡與縮放更新
+      if (ball.active) {
+        ball.y -= difficultySpeed;
+        ball.x += (ball.targetX - ball.x) * (difficultySpeed / 130);
+        ball.scale = Math.max(0.65, ball.scale - 0.0065);
+
+        const ballElem = document.getElementById('ball');
+        ballElem.style.transform = `translate(${ball.x}px, ${ball.y}px) scale(${ball.scale})`;
+
+        // 到達球門線判定 (y <= 125)
+        if (ball.y <= 125) {
+          ball.active = false;
+          ballElem.style.display = 'none';
+          score.total++;
+
+          // 判斷守門員與球的距離 (容許誤差 75px)
+          const isSaved = Math.abs(gkPositionX - ball.targetX) < 75;
+
+          if (isSaved) {
+            score.saved++;
+            playSound('save');
+            triggerStageEffect("#38bdf8");
+          } else {
+            playSound('goal');
+            triggerStageEffect("#ef4444");
+          }
+
+          document.getElementById('hud-score').innerText = `${score.saved} / ${score.total}`;
+
+          if (score.total >= 5) {
+            endMatch();
+          } else {
+            setTimeout(spawnBall, 1400);
+          }
+        }
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function triggerStageEffect(color) {
+      const stage = document.getElementById('game-stage');
+      stage.style.borderColor = color;
+      setTimeout(() => { stage.style.borderColor = "#334155"; }, 400);
+    }
+
+    function endMatch() {
+      currentPhase = PHASE.GAME_OVER;
+      document.getElementById('modal-title').innerText = "全場比賽結束！";
+      document.getElementById('modal-desc').innerHTML = `
+        難度等級：<strong>${selectedDiffName}</strong><br>
+        撲救成績：<strong>${score.saved} / ${score.total}</strong> (${Math.round((score.saved / score.total) * 100)}%)<br><br>
+        準備好挑戰更高等級或刷新成績了嗎？
+      `;
+      const btn = document.getElementById('start-btn');
+      btn.style.display = 'inline-block';
+      btn.innerText = "重新選擇難度挑戰";
+      btn.onclick = async () => {
+        score = { saved: 0, total: 0 };
+        document.getElementById('hud-score').innerText = "0 / 0";
+        await enterDifficultyPhase();
+      };
+      document.getElementById('banner-overlay').style.display = 'flex';
+    }
+  </script>
+</body>
+</html>
